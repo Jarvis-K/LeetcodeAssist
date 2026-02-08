@@ -18,9 +18,9 @@
   --danger: #d93025;
 
   --accentTint: rgba(26, 115, 232, 0.12);
-  --solvedTint: rgba(30, 142, 62, 0.14);
-  --progressTint: rgba(26, 115, 232, 0.12);
-  --reviewedTint: rgba(30, 142, 62, 0.18);
+  --solvedTint: rgba(30, 142, 62, 0.18);
+  --progressTint: rgba(26, 115, 232, 0.18);
+  --reviewedTint: rgba(30, 142, 62, 0.22);
 
   --accentBorder: rgba(26, 115, 232, 0.5);
   --focusRing: rgba(26, 115, 232, 0.18);
@@ -52,9 +52,9 @@
     --danger: #f28b82;
 
     --accentTint: rgba(138, 180, 248, 0.16);
-    --solvedTint: rgba(129, 201, 149, 0.14);
-    --progressTint: rgba(138, 180, 248, 0.14);
-    --reviewedTint: rgba(129, 201, 149, 0.2);
+    --solvedTint: rgba(129, 201, 149, 0.22);
+    --progressTint: rgba(138, 180, 248, 0.22);
+    --reviewedTint: rgba(129, 201, 149, 0.26);
 
     --accentBorder: rgba(138, 180, 248, 0.55);
     --focusRing: rgba(138, 180, 248, 0.22);
@@ -351,19 +351,19 @@ body {
 .courseItem.status-solved {
   background: var(--solvedTint);
   border-color: var(--solvedBorder);
-  box-shadow: inset 3px 0 0 var(--accent2);
+  box-shadow: inset 6px 0 0 var(--accent2);
 }
 
 .courseItem.status-in-progress {
   background: var(--progressTint);
   border-color: var(--progressBorder);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 6px 0 0 var(--accent);
 }
 
 .courseItem.status-reviewed {
   background: var(--reviewedTint);
   border-color: var(--reviewedBorder);
-  box-shadow: inset 3px 0 0 var(--accent2);
+  box-shadow: inset 6px 0 0 var(--accent2);
 }
 
 .courseItem.status-solved .courseItemTitle,
