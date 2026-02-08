@@ -12,6 +12,10 @@ function storageRemove(keys) {
   return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
 }
 
+function storageGetAll() {
+  return new Promise((resolve) => chrome.storage.local.get(null, resolve));
+}
+
 async function getSettings() {
   const { settings } = await storageGet(["settings"]);
   return {
@@ -24,6 +28,9 @@ async function getSettings() {
     uiLanguage: "zh", // "zh" | "en"
     spoilerGuard: true,
     minAttemptChars: 40,
+    memoryEnabled: true,
+    memoryAutoCurate: true,
+    adaptiveRecommend: true,
     ...(settings || {})
   };
 }
@@ -42,6 +49,52 @@ function normalizeOutputLanguage(lang) {
   const v = String(lang || "").toLowerCase().trim();
   if (v === "en" || v === "english") return "en";
   return "zh";
+}
+
+function normalizeBool(v, fallback) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase().trim();
+    if (["true", "1", "yes", "y", "on"].includes(s)) return true;
+    if (["false", "0", "no", "n", "off"].includes(s)) return false;
+  }
+  if (typeof v === "number") return v !== 0;
+  return Boolean(fallback);
+}
+
+function normalizeMemoryText(s) {
+  return String(s || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+function upsertMemoryList(list, items, nowIsoStr, limit) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  const byKey = new Map();
+  for (const it of arr) {
+    if (!it || typeof it.text !== "string") continue;
+    byKey.set(normalizeMemoryText(it.text).toLowerCase(), { ...it });
+  }
+  for (const raw of Array.isArray(items) ? items : []) {
+    const text = normalizeMemoryText(raw);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    const prev = byKey.get(key);
+    byKey.set(key, {
+      text,
+      count: prev && Number.isFinite(Number(prev.count)) ? Number(prev.count) + 1 : 1,
+      lastAt: nowIsoStr
+    });
+  }
+  const merged = Array.from(byKey.values());
+  merged.sort((a, b) => {
+    const ca = Number.isFinite(Number(a.count)) ? Number(a.count) : 0;
+    const cb = Number.isFinite(Number(b.count)) ? Number(b.count) : 0;
+    if (cb !== ca) return cb - ca;
+    return String(b.lastAt || "").localeCompare(String(a.lastAt || ""));
+  });
+  return merged.slice(0, Math.max(0, limit || 10));
 }
 
 function buildSystemPrompt(stage, settings) {
@@ -286,6 +339,144 @@ async function patchAttempt(slug, patch) {
   return next;
 }
 
+async function readUserMemory() {
+  const obj = await storageGet(["memory:user"]);
+  const mem = obj["memory:user"];
+  if (mem && typeof mem === "object") return mem;
+  return { version: 1, createdAt: nowIso(), updatedAt: nowIso(), summary: "", strengths: [], weaknesses: [], bottlenecks: [], mastered: [], topics: {} };
+}
+
+async function writeUserMemory(mem) {
+  const next = { ...(mem || {}), version: 1, updatedAt: nowIso() };
+  await storageSet({ "memory:user": next });
+  return next;
+}
+
+async function appendMemoryEvent(event) {
+  const key = "memory:events";
+  const obj = await storageGet([key]);
+  const cur = Array.isArray(obj[key]) ? obj[key] : [];
+  const next = [...cur, event].slice(-200);
+  await storageSet({ [key]: next });
+  return next;
+}
+
+async function clearAllMemory() {
+  const all = await storageGetAll();
+  const keys = Object.keys(all || {}).filter((k) => k === "memory:user" || k.startsWith("memory:"));
+  if (keys.length) await storageRemove(keys);
+  return keys.length;
+}
+
+async function getCourseForSite(site) {
+  const s = String(site || "").trim();
+  const keys = ["course:top-interview-150"];
+  if (s) keys.unshift(`course:top-interview-150:${s}`);
+  const obj = await storageGet(keys);
+  return s ? obj[`course:top-interview-150:${s}`] || obj["course:top-interview-150"] : obj["course:top-interview-150"];
+}
+
+async function topicForSlug(slug, site) {
+  const s = String(slug || "").trim();
+  if (!s) return "";
+  const course = await getCourseForSite(site);
+  if (!course || !Array.isArray(course.sections)) return "";
+  for (const sec of course.sections) {
+    for (const it of sec.items || []) {
+      if (it && it.slug === s) return String(sec.title || "").trim();
+    }
+  }
+  return "";
+}
+
+async function bumpTopicStat({ site, slug, stage, deltaKey }) {
+  const settings = await getSettings();
+  if (!normalizeBool(settings.memoryEnabled, true)) return;
+  const s = String(slug || "").trim();
+  if (!s || s === "global") return;
+  const topic = await topicForSlug(s, site);
+  if (!topic) return;
+
+  const mem = await readUserMemory();
+  const topics = mem.topics && typeof mem.topics === "object" ? { ...mem.topics } : {};
+  const cur = topics[topic] && typeof topics[topic] === "object" ? { ...topics[topic] } : {};
+  cur[deltaKey] = (Number.isFinite(Number(cur[deltaKey])) ? Number(cur[deltaKey]) : 0) + 1;
+  cur.lastAt = nowIso();
+  topics[topic] = cur;
+  await writeUserMemory({ ...mem, topics });
+
+  await appendMemoryEvent({
+    at: nowIso(),
+    slug: s,
+    topic,
+    stage: String(stage || ""),
+    type: deltaKey
+  });
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const cleaned = raw.replace(/```json|```/gi, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1));
+      } catch (e2) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+async function curateMemoryWithLLM({ settings, mem, context }) {
+  const lang = normalizeOutputLanguage(settings?.outputLanguage);
+  const sys =
+    lang === "en"
+      ? [
+          "You are a memory curator for a LeetCode tutoring agent.",
+          "Task: update the user's learning profile based on the latest interaction.",
+          "Return ONLY valid JSON. No markdown. No code fences.",
+          "Do NOT include problem statement or full code. Keep it high-level and privacy-preserving.",
+          "Limit each list to <= 6 short items (<= 12 words each).",
+          "Output schema: { summary: string, strengths: string[], weaknesses: string[], bottlenecks: string[], mastered: string[] }"
+        ].join("\n")
+      : [
+          "你是 LeetCode 导师 agent 的“记忆整理员”。",
+          "任务：根据最新一次交互，更新用户的学习画像（强项/弱项/瓶颈/已掌握）。",
+          "只返回严格 JSON，不要 markdown，不要代码块。",
+          "不要记录题目原文或完整代码，只保留高层信息，注意隐私。",
+          "每个列表最多 6 条，每条尽量短（<= 12 个词/字）。",
+          "输出结构: { summary: string, strengths: string[], weaknesses: string[], bottlenecks: string[], mastered: string[] }"
+        ].join("\n");
+
+  const user = [
+    `Current memory summary:\n${String(mem.summary || "").slice(0, 800)}`,
+    "",
+    "Latest interaction:",
+    JSON.stringify(context || {}, null, 2)
+  ].join("\n");
+
+  const out = await callChatCompletions({
+    baseUrl: settings.baseUrl,
+    apiKey: settings.apiKey,
+    model: settings.model,
+    temperature: 0,
+    maxTokens: Math.min(400, Math.max(150, Math.floor(Number(settings.maxTokens || 800) / 4))),
+    messages: [
+      { role: "system", content: sys },
+      { role: "user", content: user }
+    ]
+  });
+
+  return extractJsonObject(out.content);
+}
+
 function spoilerGuardBlockMessage(settings) {
   const lang = normalizeOutputLanguage(settings?.outputLanguage);
   const minChars = Number.isFinite(Number(settings?.minAttemptChars)) ? Number(settings.minAttemptChars) : 40;
@@ -398,7 +589,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "PATCH_PROGRESS") {
       const slug = String(msg.slug || "").trim();
       if (!slug) return sendResponse({ ok: false, error: "Missing slug" });
+      const before = await readProgress(slug);
       const progress = await patchProgress(slug, msg.patch || {});
+      const site = msg.site ? String(msg.site).trim() : "";
+      if (normalizeBool((await getSettings()).memoryEnabled, true)) {
+        const prev = normalizeStatus(before.status);
+        const next = normalizeStatus(progress.status);
+        if (prev !== next) {
+          if (next === "in_progress" && prev === "unstarted") await bumpTopicStat({ site, slug, stage: "progress", deltaKey: "started" });
+          if (next === "solved" && (prev === "unstarted" || prev === "in_progress")) await bumpTopicStat({ site, slug, stage: "progress", deltaKey: "solved" });
+          if (next === "reviewed") await bumpTopicStat({ site, slug, stage: "progress", deltaKey: "reviewed" });
+        }
+      }
       return sendResponse({ ok: true, progress });
     }
 
@@ -442,6 +644,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return sendResponse({ ok: true, settings });
     }
 
+    if (msg.type === "MEMORY_GET") {
+      const mem = await readUserMemory();
+      return sendResponse({ ok: true, memory: mem });
+    }
+
+    if (msg.type === "MEMORY_CLEAR") {
+      const n = await clearAllMemory();
+      return sendResponse({ ok: true, removed: n });
+    }
+
     if (msg.type === "LLM_CHAT") {
       const slugRaw = String(msg.slug || "").trim();
       const slug = slugRaw || "global";
@@ -453,7 +665,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!settings.baseUrl) return sendResponse({ ok: false, error: "Missing baseUrl in settings" });
 
       const history = compactHistory(await readChat(slug), 16);
-      const sys = buildSystemPrompt(stage, settings);
+      const site = msg.site ? String(msg.site).trim() : "";
+      const mem = await readUserMemory();
+      const topic = slugRaw && slugRaw !== "global" ? await topicForSlug(slugRaw, site) : "";
+
+      let sys = buildSystemPrompt(stage, settings);
+      if (normalizeBool(settings.memoryEnabled, true)) {
+        const topStrengths = (Array.isArray(mem.strengths) ? mem.strengths : []).slice(0, 4).map((x) => x.text).filter(Boolean);
+        const topWeaknesses = (Array.isArray(mem.weaknesses) ? mem.weaknesses : []).slice(0, 4).map((x) => x.text).filter(Boolean);
+        const topBottlenecks = (Array.isArray(mem.bottlenecks) ? mem.bottlenecks : []).slice(0, 4).map((x) => x.text).filter(Boolean);
+        const summary = String(mem.summary || "").trim().slice(0, 800);
+        const lines = [];
+        if (summary) lines.push(`User memory summary: ${summary}`);
+        if (topStrengths.length) lines.push(`Known strengths: ${topStrengths.join("; ")}`);
+        if (topWeaknesses.length) lines.push(`Known weaknesses: ${topWeaknesses.join("; ")}`);
+        if (topBottlenecks.length) lines.push(`Known bottlenecks: ${topBottlenecks.join("; ")}`);
+        if (lines.length) sys = `${sys}\n\n${lines.join("\n")}`;
+      }
 
       const isSpoilerStage = stage === "hint" || stage === "pseudocode" || stage === "explain";
       if (
@@ -480,6 +708,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       const problem = msg.problem || {};
       const parts = [];
+      if (topic) parts.push(`Course Topic:\n- ${topic}`);
       if (problem && (problem.slug || problem.title || problem.difficulty || problem.contentText)) {
         parts.push(
           [
@@ -493,6 +722,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             .filter(Boolean)
             .join("\n")
         );
+      }
+
+      if (slugRaw && slugRaw !== "global") {
+        const attempt = await readAttempt(slugRaw);
+        const notes = String(attempt && attempt.notes ? attempt.notes : "").trim();
+        if (notes) parts.push(`User Attempt Notes:\n${notes}`);
       }
 
       if (msg.code && typeof msg.code === "string" && msg.code.trim()) {
@@ -527,6 +762,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (slugRaw && slugRaw !== "global") {
         await patchProgress(slug, { status: "in_progress", lastStage: stage });
+      }
+
+      if (normalizeBool(settings.memoryEnabled, true) && slugRaw && slugRaw !== "global") {
+        await bumpTopicStat({ site, slug: slugRaw, stage, deltaKey: "interactions" });
+        if (["hint", "pseudocode", "explain"].includes(stage)) await bumpTopicStat({ site, slug: slugRaw, stage, deltaKey: "hintRequests" });
+        if (stage === "review") await bumpTopicStat({ site, slug: slugRaw, stage, deltaKey: "reviews" });
+
+        if (normalizeBool(settings.memoryAutoCurate, true) && (stage === "review" || stage === "postmortem")) {
+          try {
+            const curated = await curateMemoryWithLLM({
+              settings,
+              mem,
+              context: {
+                site,
+                slug: slugRaw,
+                topic,
+                stage,
+                user: userText.slice(0, 1200),
+                assistant: assistantContent.slice(0, 1200)
+              }
+            });
+            if (curated && typeof curated === "object") {
+              const now = nowIso();
+              const nextMem = await readUserMemory();
+              const summary = typeof curated.summary === "string" ? curated.summary.trim().slice(0, 800) : nextMem.summary || "";
+              const strengths = upsertMemoryList(nextMem.strengths, curated.strengths, now, 10);
+              const weaknesses = upsertMemoryList(nextMem.weaknesses, curated.weaknesses, now, 10);
+              const bottlenecks = upsertMemoryList(nextMem.bottlenecks, curated.bottlenecks, now, 10);
+              const mastered = upsertMemoryList(nextMem.mastered, curated.mastered, now, 10);
+              await writeUserMemory({ ...nextMem, summary, strengths, weaknesses, bottlenecks, mastered });
+            }
+          } catch (e) {
+            // Ignore memory failures; do not block the user.
+          }
+        }
       }
 
       return sendResponse({ ok: true, assistant: assistantContent, chat: nextChat });

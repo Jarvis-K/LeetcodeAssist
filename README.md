@@ -24,6 +24,7 @@ Agent-driven LeetCode assistant (Chrome extension) focused on the LeetCode "Top 
 - Settings: Configure an OpenAI-compatible API endpoint + key + model.
 - Bilingual: UI language + tutor output language (中文 / English).
 - Spoiler Guard: Unlock hints/pseudocode/explain only after you record your own attempt.
+- Memory: Stores a local learning profile (strengths/weaknesses/bottlenecks/mastery) to improve recommendations and tutoring.
 
 ## Notes
 

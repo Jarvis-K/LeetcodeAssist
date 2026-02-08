@@ -74,6 +74,7 @@ const state = {
   progressBySlug: {},
   settings: null,
   attempt: null,
+  userMemory: null,
   chat: [],
   pending: false,
   focus: {
@@ -142,6 +143,18 @@ const I18N = {
     label_output_language: "导师输出",
     label_spoiler_guard: "Spoiler Guard（防剧透）",
     label_min_attempt: "最少尝试字数",
+    label_memory_enabled: "记忆（Memory）",
+    label_memory_auto: "自动更新画像",
+    label_adaptive_recommend: "自适应推荐",
+    btn_refresh_memory: "刷新记忆",
+    btn_clear_memory: "清空记忆",
+    memory_hint: "记忆仅保存在本地 Chrome 存储中（不会自动上传）。",
+    memory_empty: "暂无记忆。建议在 Review / Postmortem 后会更准确。",
+    memory_section_summary: "画像摘要",
+    memory_section_strengths: "强项",
+    memory_section_weaknesses: "弱项",
+    memory_section_bottlenecks: "瓶颈",
+    memory_section_mastered: "已掌握",
     settings_configured: "已配置",
     settings_not_configured: "未配置",
     settings_saved: "已保存",
@@ -211,6 +224,18 @@ const I18N = {
     label_output_language: "Tutor Output",
     label_spoiler_guard: "Spoiler Guard",
     label_min_attempt: "Min attempt chars",
+    label_memory_enabled: "Memory",
+    label_memory_auto: "Auto curate",
+    label_adaptive_recommend: "Adaptive recommend",
+    btn_refresh_memory: "Refresh Memory",
+    btn_clear_memory: "Clear Memory",
+    memory_hint: "Memory is stored locally in Chrome storage (not uploaded automatically).",
+    memory_empty: "No memory yet. It improves after Review / Postmortem.",
+    memory_section_summary: "Profile Summary",
+    memory_section_strengths: "Strengths",
+    memory_section_weaknesses: "Weaknesses",
+    memory_section_bottlenecks: "Bottlenecks",
+    memory_section_mastered: "Mastered",
     settings_configured: "Configured",
     settings_not_configured: "Not configured",
     settings_saved: "Saved",
@@ -421,6 +446,12 @@ function applyUiText() {
   el("labelOutputLanguage").textContent = t("label_output_language");
   el("labelSpoilerGuard").textContent = t("label_spoiler_guard");
   el("labelMinAttemptChars").textContent = t("label_min_attempt");
+  el("labelMemoryEnabled").textContent = t("label_memory_enabled");
+  el("labelMemoryAutoCurate").textContent = t("label_memory_auto");
+  el("labelAdaptiveRecommend").textContent = t("label_adaptive_recommend");
+  el("btnRefreshMemory").textContent = t("btn_refresh_memory");
+  el("btnClearMemory").textContent = t("btn_clear_memory");
+  el("memoryHint").textContent = t("memory_hint");
 }
 
 function renderCourse() {
@@ -531,7 +562,8 @@ function renderCourse() {
         const resp = await runtimeSendMessage({
           type: "PATCH_PROGRESS",
           slug: item.slug,
-          patch: { status: nextStatus }
+          patch: { status: nextStatus },
+          site: state.siteOrigin
         });
         if (resp && resp.ok) {
           state.progressBySlug[item.slug] = resp.progress;
@@ -677,6 +709,56 @@ function renderAttemptStatus() {
   el("btnQuickExplain").disabled = disable;
 }
 
+function memoryItemTexts(list, maxItems) {
+  const arr = Array.isArray(list) ? list : [];
+  const out = [];
+  for (const it of arr) {
+    if (!it) continue;
+    if (typeof it === "string") out.push(it);
+    else if (typeof it.text === "string") out.push(it.text);
+    if (out.length >= (maxItems || 6)) break;
+  }
+  return out;
+}
+
+async function loadUserMemory() {
+  const resp = await runtimeSendMessage({ type: "MEMORY_GET" });
+  state.userMemory = resp && resp.ok ? resp.memory : null;
+  renderMemoryPanel();
+}
+
+function renderMemoryPanel() {
+  const box = el("memSummary");
+  const enabled = Boolean(state.settings && state.settings.memoryEnabled);
+  box.style.opacity = enabled ? "1" : "0.55";
+
+  if (!enabled) {
+    box.value = "";
+    box.placeholder = t("memory_empty");
+    return;
+  }
+
+  const mem = state.userMemory;
+  const summary = mem && typeof mem.summary === "string" ? mem.summary.trim() : "";
+  const strengths = memoryItemTexts(mem && mem.strengths, 6);
+  const weaknesses = memoryItemTexts(mem && mem.weaknesses, 6);
+  const bottlenecks = memoryItemTexts(mem && mem.bottlenecks, 6);
+  const mastered = memoryItemTexts(mem && mem.mastered, 6);
+
+  if (!summary && !strengths.length && !weaknesses.length && !bottlenecks.length && !mastered.length) {
+    box.value = t("memory_empty");
+    return;
+  }
+
+  const parts = [];
+  parts.push(`${t("memory_section_summary")}:\n${summary || t("memory_empty")}`);
+  if (strengths.length) parts.push(`${t("memory_section_strengths")}:\n- ${strengths.join("\n- ")}`);
+  if (weaknesses.length) parts.push(`${t("memory_section_weaknesses")}:\n- ${weaknesses.join("\n- ")}`);
+  if (bottlenecks.length) parts.push(`${t("memory_section_bottlenecks")}:\n- ${bottlenecks.join("\n- ")}`);
+  if (mastered.length) parts.push(`${t("memory_section_mastered")}:\n- ${mastered.join("\n- ")}`);
+  box.value = parts.join("\n\n");
+}
+
 function setPending(p) {
   state.pending = Boolean(p);
   el("btnSend").disabled = state.pending;
@@ -723,7 +805,8 @@ async function sendTutorMessage(userText, stageOverride) {
     slug,
     stage,
     userMessage: text,
-    problem
+    problem,
+    site: state.siteOrigin
   });
 
   if (resp && resp.ok) {
@@ -792,7 +875,8 @@ async function sendReview(kind) {
     userMessage,
     problem,
     code,
-    language: lang
+    language: lang,
+    site: state.siteOrigin
   });
 
   if (resp && resp.ok) {
@@ -822,12 +906,16 @@ async function loadSettingsIntoForm() {
   el("setOutputLanguage").value = normalizeLang(s.outputLanguage);
   el("setSpoilerGuard").checked = Boolean(s.spoilerGuard);
   el("setMinAttemptChars").value = String(Number.isFinite(Number(s.minAttemptChars)) ? Number(s.minAttemptChars) : 40);
+  el("setMemoryEnabled").checked = Boolean(s.memoryEnabled);
+  el("setMemoryAutoCurate").checked = Boolean(s.memoryAutoCurate);
+  el("setAdaptiveRecommend").checked = Boolean(s.adaptiveRecommend);
 
   const configured = Boolean((s.baseUrl || "").trim()) && Boolean((s.model || "").trim());
   el("settingsStatus").textContent = configured ? t("settings_configured") : t("settings_not_configured");
 
   applyUiText();
   renderAttemptStatus();
+  renderMemoryPanel();
 }
 
 async function saveSettingsFromForm() {
@@ -840,6 +928,9 @@ async function saveSettingsFromForm() {
   const outputLanguage = normalizeLang(el("setOutputLanguage").value);
   const spoilerGuard = Boolean(el("setSpoilerGuard").checked);
   const minAttemptChars = Number(el("setMinAttemptChars").value);
+  const memoryEnabled = Boolean(el("setMemoryEnabled").checked);
+  const memoryAutoCurate = Boolean(el("setMemoryAutoCurate").checked);
+  const adaptiveRecommend = Boolean(el("setAdaptiveRecommend").checked);
 
   const resp = await runtimeSendMessage({
     type: "SETTINGS_SET",
@@ -852,7 +943,10 @@ async function saveSettingsFromForm() {
       uiLanguage,
       outputLanguage,
       spoilerGuard,
-      minAttemptChars: Number.isFinite(minAttemptChars) ? Math.max(0, Math.floor(minAttemptChars)) : 40
+      minAttemptChars: Number.isFinite(minAttemptChars) ? Math.max(0, Math.floor(minAttemptChars)) : 40,
+      memoryEnabled,
+      memoryAutoCurate,
+      adaptiveRecommend
     }
   });
 
@@ -861,6 +955,7 @@ async function saveSettingsFromForm() {
     el("settingsStatus").textContent = t("settings_saved");
     applyUiText();
     renderAttemptStatus();
+    renderMemoryPanel();
   } else {
     el("settingsStatus").textContent = t("settings_save_failed");
   }
@@ -922,6 +1017,47 @@ function pickRecommendedSlug() {
     const st = String(state.progressBySlug[slug]?.status || "unstarted").toLowerCase();
     if (st === "in_progress") return slug;
   }
+
+  const adaptive = Boolean(state.settings && state.settings.adaptiveRecommend);
+  if (adaptive && state.course && Array.isArray(state.course.sections)) {
+    const memTopics =
+      state.userMemory && state.userMemory.topics && typeof state.userMemory.topics === "object" ? state.userMemory.topics : {};
+    const seen = new Set();
+    const candidates = [];
+
+    for (const section of state.course.sections) {
+      const topic = String(section && section.title ? section.title : "").trim();
+      if (!topic) continue;
+      let total = 0;
+      let solved = 0;
+      let firstUnstarted = "";
+
+      for (const it of section.items || []) {
+        const slug = it && it.slug ? String(it.slug).trim() : "";
+        if (!slug || seen.has(`${topic}::${slug}`)) continue;
+        seen.add(`${topic}::${slug}`);
+        total += 1;
+        const st = String(state.progressBySlug[slug]?.status || "unstarted").toLowerCase();
+        if (st === "solved" || st === "reviewed") solved += 1;
+        else if (!firstUnstarted && st === "unstarted") firstUnstarted = slug;
+      }
+
+      if (!firstUnstarted || total <= 0) continue;
+      const solvedRate = solved / Math.max(1, total);
+
+      const stats = memTopics[topic] && typeof memTopics[topic] === "object" ? memTopics[topic] : {};
+      const interactions = Number.isFinite(Number(stats.interactions)) ? Number(stats.interactions) : 0;
+      const hintRequests = Number.isFinite(Number(stats.hintRequests)) ? Number(stats.hintRequests) : 0;
+      const hintRate = hintRequests / Math.max(1, interactions);
+
+      const score = (1 - solvedRate) + 0.55 * Math.min(1, hintRate) + 0.08 * Math.min(1, interactions / 12);
+      candidates.push({ topic, score, slug: firstUnstarted });
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    if (candidates.length && candidates[0].slug) return candidates[0].slug;
+  }
+
   for (const slug of slugs) {
     const st = String(state.progressBySlug[slug]?.status || "unstarted").toLowerCase();
     if (st === "unstarted") return slug;
@@ -1126,6 +1262,17 @@ function bindActions() {
     }
   });
 
+  el("btnRefreshMemory").addEventListener("click", async () => {
+    await loadUserMemory();
+    await refreshDailyPanel();
+  });
+
+  el("btnClearMemory").addEventListener("click", async () => {
+    await runtimeSendMessage({ type: "MEMORY_CLEAR" });
+    await loadUserMemory();
+    await refreshDailyPanel();
+  });
+
   el("setUiLanguage").addEventListener("change", async () => {
     // Optimistic UI switch without saving.
     state.settings = { ...(state.settings || {}), uiLanguage: normalizeLang(el("setUiLanguage").value) };
@@ -1133,6 +1280,7 @@ function bindActions() {
     renderAttemptStatus();
     renderCourse();
     renderChat();
+    renderMemoryPanel();
     await refreshDailyPanel();
   });
 }
@@ -1142,6 +1290,7 @@ async function init() {
   bindActions();
 
   await loadSettingsIntoForm();
+  await loadUserMemory();
 
   await loadProgressIndex();
   await loadContextFromActiveTab();
@@ -1165,6 +1314,11 @@ async function init() {
     if (Object.keys(changes).some((k) => k.startsWith("progress:"))) {
       await loadProgressIndex();
       renderCourse();
+      await refreshDailyPanel();
+    }
+
+    if (changes["memory:user"]) {
+      await loadUserMemory();
       await refreshDailyPanel();
     }
   });

@@ -190,6 +190,30 @@
           <button class="btn btnGhost" id="btnTestSettings">Test</button>
           <div class="pill" id="settingsStatus">Not configured</div>
         </div>
+
+        <div class="field">
+          <label class="labelInline">
+            <input type="checkbox" id="setMemoryEnabled" />
+            <span id="labelMemoryEnabled">Memory</span>
+          </label>
+        </div>
+        <div class="row">
+          <label class="labelInline">
+            <input type="checkbox" id="setMemoryAutoCurate" />
+            <span id="labelMemoryAutoCurate">Auto curate</span>
+          </label>
+          <label class="labelInline">
+            <input type="checkbox" id="setAdaptiveRecommend" />
+            <span id="labelAdaptiveRecommend">Adaptive recommend</span>
+          </label>
+        </div>
+        <div class="row">
+          <button class="btn btnGhost" id="btnRefreshMemory">Refresh Memory</button>
+          <button class="btn btnGhost" id="btnClearMemory">Clear Memory</button>
+        </div>
+        <textarea id="memSummary" class="textarea" rows="6" readonly placeholder=""></textarea>
+        <div class="smallHint" id="memoryHint">Memory is stored locally in Chrome storage.</div>
+
         <div class="courseHint">
           Host permissions currently allow only `api.openai.com` and `localhost`. If you use another provider domain,
           add it to `extension/manifest.json` -> `host_permissions`.
