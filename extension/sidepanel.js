@@ -136,9 +136,12 @@ const I18N = {
     status_in_progress: "进行中",
     status_solved: "已通过",
     status_reviewed: "已复习",
+    chat_role_user: "我",
+    chat_role_agent: "导师",
     msg_empty_chat: "还没有消息。",
     msg_thinking: "思考中…",
     msg_paste_code_first: "请先粘贴代码或从编辑器拉取。",
+    init_error: "初始化错误: {msg}",
     label_ui_language: "界面语言",
     label_output_language: "导师输出",
     label_spoiler_guard: "Spoiler Guard（防剧透）",
@@ -217,9 +220,12 @@ const I18N = {
     status_in_progress: "in progress",
     status_solved: "solved",
     status_reviewed: "reviewed",
+    chat_role_user: "You",
+    chat_role_agent: "Tutor",
     msg_empty_chat: "No messages yet.",
     msg_thinking: "Thinking...",
     msg_paste_code_first: "Paste code first (or pull from editor).",
+    init_error: "Init error: {msg}",
     label_ui_language: "UI Language",
     label_output_language: "Tutor Output",
     label_spoiler_guard: "Spoiler Guard",
@@ -291,6 +297,9 @@ function cycleStatus(s) {
 
 function difficultyClass(d) {
   const v = String(d || "").toLowerCase();
+  if (v.includes("简单")) return "easy";
+  if (v.includes("中等") || v === "中") return "medium";
+  if (v.includes("困难")) return "hard";
   if (v.includes("easy")) return "easy";
   if (v.includes("hard")) return "hard";
   if (v.includes("medium")) return "medium";
@@ -603,7 +612,7 @@ function renderChat() {
     msg.className = `msg ${m.role === "user" ? "user" : "assistant"}`;
     const header = document.createElement("div");
     header.className = "msgHeader";
-    header.textContent = m.role === "user" ? "You" : "Agent";
+    header.textContent = m.role === "user" ? t("chat_role_user") : t("chat_role_agent");
     const body = document.createElement("div");
     body.textContent = m.content || "";
     msg.appendChild(header);
@@ -1325,5 +1334,5 @@ async function init() {
 }
 
 init().catch((e) => {
-  setCtxLabel(`Init error: ${String(e && e.message ? e.message : e)}`);
+  setCtxLabel(t("init_error", { msg: String(e && e.message ? e.message : e) }));
 });

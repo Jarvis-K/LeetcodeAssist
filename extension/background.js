@@ -376,6 +376,165 @@ async function getCourseForSite(site) {
   return s ? obj[`course:top-interview-150:${s}`] || obj["course:top-interview-150"] : obj["course:top-interview-150"];
 }
 
+function collectCourseItems(course) {
+  const out = [];
+  if (!course || !Array.isArray(course.sections)) return out;
+  for (const sec of course.sections) {
+    for (const it of sec.items || []) out.push(it);
+  }
+  return out;
+}
+
+function uniqueSlugsFromCourse(course) {
+  const items = collectCourseItems(course);
+  const seen = new Set();
+  const slugs = [];
+  for (const it of items) {
+    const slug = it && it.slug ? String(it.slug).trim() : "";
+    if (!slug || seen.has(slug)) continue;
+    seen.add(slug);
+    slugs.push(slug);
+  }
+  return slugs;
+}
+
+function computeCourseLcStats(course) {
+  const stats = { solved: 0, in_progress: 0, unstarted: 0, unknown: 0 };
+  const items = collectCourseItems(course);
+  for (const it of items) {
+    const s = String(it && it.lcState ? it.lcState : "").toLowerCase().trim();
+    if (s === "solved") stats.solved += 1;
+    else if (s === "in_progress") stats.in_progress += 1;
+    else if (s === "unstarted") stats.unstarted += 1;
+    else stats.unknown += 1;
+  }
+  return stats;
+}
+
+function buildSlugStatusMapFromAllProblemsApi(json) {
+  const map = new Map();
+  const pairs = Array.isArray(json && json.stat_status_pairs) ? json.stat_status_pairs : [];
+  for (const p of pairs) {
+    const slug = p?.stat?.question__title_slug;
+    if (typeof slug !== "string" || !slug.trim()) continue;
+    const status = p?.status; // "ac" | "notac" | null
+    const s = typeof status === "string" ? status.toLowerCase().trim() : "";
+    if (s === "ac") map.set(slug, "solved");
+    else if (s === "notac") map.set(slug, "in_progress");
+    else map.set(slug, "unstarted");
+  }
+  return map;
+}
+
+function applyLcStatusMapToCourse(course, statusMap, statusSource) {
+  if (!course || !Array.isArray(course.sections) || !statusMap || typeof statusMap.get !== "function") return course;
+  for (const sec of course.sections) {
+    for (const it of sec.items || []) {
+      const slug = it && it.slug ? String(it.slug).trim() : "";
+      if (!slug) continue;
+      const st = statusMap.get(slug);
+      if (st) it.lcState = st;
+    }
+  }
+  course.statusSource = statusSource || String(course.statusSource || "").trim() || "api/problems/all";
+  course.statusFetchedAt = nowIso();
+  course.lcStats = computeCourseLcStats(course);
+  return course;
+}
+
+function shouldBackfillLcStatus(course) {
+  if (!course) return false;
+  if (String(course.statusSource || "") === "api/problems/all") return false;
+  const slugs = uniqueSlugsFromCourse(course);
+  const total = slugs.length || Number(course.total || 0) || 0;
+  if (!total) return false;
+  const lcStats = course.lcStats && typeof course.lcStats === "object" ? course.lcStats : computeCourseLcStats(course);
+  const unknown = Number(lcStats.unknown || 0);
+  // If basically everything is unknown, try a more privileged fetch from the page context.
+  return unknown >= total;
+}
+
+function executeScriptMainWorld(tabId, func, args) {
+  return new Promise((resolve) => {
+    try {
+      chrome.scripting.executeScript(
+        {
+          target: { tabId },
+          world: "MAIN",
+          func,
+          args: Array.isArray(args) ? args : []
+        },
+        (results) => {
+          const err = chrome.runtime.lastError;
+          if (err) return resolve({ ok: false, error: err.message || String(err) });
+          const r = Array.isArray(results) && results[0] ? results[0].result : null;
+          resolve({ ok: true, result: r });
+        }
+      );
+    } catch (e) {
+      resolve({ ok: false, error: String(e && e.message ? e.message : e) });
+    }
+  });
+}
+
+async function fetchAllProblemsApiFromTab(tabId) {
+  // Run fetch in the page's main world to maximize cookie/client-hint compatibility (not the extension context).
+  function mainWorldFetchAllProblems() {
+    return (async () => {
+      try {
+        const paths = ["/api/problems/all/", "/api/problems/algorithms/"];
+        for (const path of paths) {
+          const res = await fetch(path, { method: "GET", credentials: "include" });
+          if (!res.ok) continue;
+          const json = await res.json();
+          if (json && Array.isArray(json.stat_status_pairs)) return { ok: true, path, json };
+        }
+        return { ok: false, error: "No stat_status_pairs" };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message ? e.message : e) };
+      }
+    })();
+  }
+
+  const out = await executeScriptMainWorld(tabId, mainWorldFetchAllProblems, []);
+  if (!out.ok) return { ok: false, error: out.error || "executeScript failed" };
+  if (!out.result || typeof out.result !== "object") return { ok: false, error: "Missing executeScript result" };
+  if (!out.result.ok) return { ok: false, error: out.result.error || "fetch failed" };
+  return { ok: true, path: out.result.path, json: out.result.json };
+}
+
+async function upgradeLocalProgressFromCourse(course) {
+  // Import completion state into local progress if user hasn't tracked it yet.
+  // Rule: never downgrade an existing state; only upgrade unstarted/in_progress based on LeetCode state.
+  const items = collectCourseItems(course);
+  const slugs = uniqueSlugsFromCourse(course);
+  const keys = slugs.map((s) => `progress:${s}`);
+  const existing = keys.length ? await storageGet(keys) : {};
+  const updates = {};
+  for (const it of items) {
+    const slug = it && it.slug ? String(it.slug).trim() : "";
+    if (!slug) continue;
+    const key = `progress:${slug}`;
+    const cur = existing[key] || { slug, status: "unstarted", updatedAt: nowIso() };
+    const curStatus = normalizeStatus(cur.status);
+    if (curStatus === "reviewed") continue;
+    const fromLc = lcStateToProgressStatus(it.lcState || it.lcStatus || it.state || it.status);
+    if (!fromLc) continue;
+    if (fromLc === "unstarted") continue;
+
+    // Upgrade logic.
+    if (fromLc === "solved" && (curStatus === "unstarted" || curStatus === "in_progress")) {
+      updates[key] = applyProgressPatch(cur, { status: "solved" });
+    } else if (fromLc === "in_progress" && curStatus === "unstarted") {
+      updates[key] = applyProgressPatch(cur, { status: "in_progress" });
+    }
+  }
+  if (Object.keys(updates).length) {
+    await storageSet(updates);
+  }
+  return Object.keys(updates).length;
+}
+
 async function topicForSlug(slug, site) {
   const s = String(slug || "").trim();
   if (!s) return "";
@@ -526,6 +685,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!course || course.id !== "top-interview-150") {
         return sendResponse({ ok: false, error: "Unsupported course payload" });
       }
+      // Ensure baseline derived fields exist even if the sender didn't compute them.
+      if (!course.total) course.total = uniqueSlugsFromCourse(course).length;
+      if (!course.lcStats || typeof course.lcStats !== "object") course.lcStats = computeCourseLcStats(course);
+
       const site = course.site ? String(course.site).trim() : "";
       if (site) {
         await storageSet({ [`course:top-interview-150:${site}`]: course });
@@ -533,38 +696,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Keep last-imported as default.
       await storageSet({ "course:top-interview-150": course });
 
-      // Import completion state into local progress if user hasn't tracked it yet.
-      // Rule: never downgrade an existing state; only upgrade unstarted/in_progress based on LeetCode state.
-      const items = [];
-      for (const section of course.sections || []) {
-        for (const it of section.items || []) items.push(it);
-      }
-      const slugs = items
-        .map((it) => (it && it.slug ? String(it.slug).trim() : ""))
-        .filter(Boolean);
-      const keys = slugs.map((s) => `progress:${s}`);
-      const existing = keys.length ? await storageGet(keys) : {};
-      const updates = {};
-      for (const it of items) {
-        const slug = it && it.slug ? String(it.slug).trim() : "";
-        if (!slug) continue;
-        const key = `progress:${slug}`;
-        const cur = existing[key] || { slug, status: "unstarted", updatedAt: nowIso() };
-        const curStatus = normalizeStatus(cur.status);
-        if (curStatus === "reviewed") continue;
-        const fromLc = lcStateToProgressStatus(it.lcState || it.lcStatus || it.state || it.status);
-        if (!fromLc) continue;
-        if (fromLc === "unstarted") continue;
+      await upgradeLocalProgressFromCourse(course);
 
-        // Upgrade logic.
-        if (fromLc === "solved" && (curStatus === "unstarted" || curStatus === "in_progress")) {
-          updates[key] = applyProgressPatch(cur, { status: "solved" });
-        } else if (fromLc === "in_progress" && curStatus === "unstarted") {
-          updates[key] = applyProgressPatch(cur, { status: "in_progress" });
+      // Leetcode.cn may block extension-context fetch to /api/problems/all/ (Cloudflare). If so, run the fetch in the
+      // page main-world and patch the course + local progress from the returned status map.
+      const tabId = sender && sender.tab && typeof sender.tab.id === "number" ? sender.tab.id : null;
+      if (tabId && shouldBackfillLcStatus(course)) {
+        const fetched = await fetchAllProblemsApiFromTab(tabId);
+        if (fetched.ok && fetched.json) {
+          const statusMap = buildSlugStatusMapFromAllProblemsApi(fetched.json);
+          applyLcStatusMapToCourse(course, statusMap, "api/problems/all");
+          if (site) await storageSet({ [`course:top-interview-150:${site}`]: course });
+          await storageSet({ "course:top-interview-150": course });
+          await upgradeLocalProgressFromCourse(course);
         }
-      }
-      if (Object.keys(updates).length) {
-        await storageSet(updates);
       }
 
       return sendResponse({ ok: true });
