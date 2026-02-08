@@ -671,6 +671,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       let sys = buildSystemPrompt(stage, settings);
       if (normalizeBool(settings.memoryEnabled, true)) {
+        const lang = normalizeOutputLanguage(settings?.outputLanguage);
         const topStrengths = (Array.isArray(mem.strengths) ? mem.strengths : []).slice(0, 4).map((x) => x.text).filter(Boolean);
         const topWeaknesses = (Array.isArray(mem.weaknesses) ? mem.weaknesses : []).slice(0, 4).map((x) => x.text).filter(Boolean);
         const topBottlenecks = (Array.isArray(mem.bottlenecks) ? mem.bottlenecks : []).slice(0, 4).map((x) => x.text).filter(Boolean);
@@ -680,6 +681,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (topStrengths.length) lines.push(`Known strengths: ${topStrengths.join("; ")}`);
         if (topWeaknesses.length) lines.push(`Known weaknesses: ${topWeaknesses.join("; ")}`);
         if (topBottlenecks.length) lines.push(`Known bottlenecks: ${topBottlenecks.join("; ")}`);
+
+        const topicStats = mem && mem.topics && typeof mem.topics === "object" ? mem.topics : {};
+        const topicEntries = [];
+        for (const [k, v] of Object.entries(topicStats)) {
+          if (!k) continue;
+          const st = v && typeof v === "object" ? v : {};
+          const interactions = Number.isFinite(Number(st.interactions)) ? Number(st.interactions) : 0;
+          const hintRequests = Number.isFinite(Number(st.hintRequests)) ? Number(st.hintRequests) : 0;
+          const solved = Number.isFinite(Number(st.solved)) ? Number(st.solved) : 0;
+          const reviewed = Number.isFinite(Number(st.reviewed)) ? Number(st.reviewed) : 0;
+          if (interactions + hintRequests + solved + reviewed <= 0) continue;
+          const hintRate = hintRequests / Math.max(1, interactions);
+          const score = hintRate + 0.08 * Math.min(1, interactions / 12);
+          topicEntries.push({ topic: k, interactions, hintRequests, solved, reviewed, score });
+        }
+        topicEntries.sort((a, b) => b.score - a.score);
+        const topTopics = topicEntries.slice(0, 3);
+        if (topTopics.length) {
+          if (lang === "en") {
+            lines.push(
+              `Topic stats (recent): ${topTopics
+                .map((t) => `${t.topic} (hints ${t.hintRequests}/${t.interactions}, solved ${t.solved}, reviewed ${t.reviewed})`)
+                .join(" | ")}`
+            );
+          } else {
+            lines.push(
+              `题型统计（近期）：${topTopics
+                .map((t) => `${t.topic}（提示 ${t.hintRequests}/${t.interactions}，已通过 ${t.solved}，已复习 ${t.reviewed}）`)
+                .join(" | ")}`
+            );
+          }
+        }
+
         if (lines.length) sys = `${sys}\n\n${lines.join("\n")}`;
       }
 
