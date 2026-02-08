@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "LeetCoder Agent (Hot150)",
+  "version": "0.2.0",
+  "description": "Agent-driven, course-like LeetCode assistant for the Top Interview 150 (Hot150) study plan.",
+  "permissions": ["storage", "tabs", "activeTab", "sidePanel"],
+  "host_permissions": ["https://leetcode.com/*", "https://leetcode.cn/*", "https://api.openai.com/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "LeetCoder Agent",
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.com/*", "https://leetcode.cn/*"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

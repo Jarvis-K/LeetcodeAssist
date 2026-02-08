@@ -1,0 +1,202 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>LeetCoder Agent</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">
+        <div class="brandTitle">LeetCoder Agent</div>
+        <div class="brandSub">Top Interview 150 (Hot150)</div>
+      </div>
+      <div class="context">
+        <div class="ctxLabel">Current</div>
+        <div class="ctxValue" id="ctxValue">Not on a problem</div>
+        <button class="btn btnSmall" id="btnRefreshCtx">Refresh</button>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Tabs">
+      <button class="tab isActive" data-tab="course">Course</button>
+      <button class="tab" data-tab="tutor">Tutor</button>
+      <button class="tab" data-tab="review">Review</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <main class="main">
+      <section class="page isActive" id="page-course" data-page="course">
+        <div class="daily" id="dailyPanel">
+          <div class="dailyTop">
+            <div class="dailyTitle" id="dailyTitle">Today</div>
+            <div class="pill" id="dailyStreak">Streak: 0</div>
+          </div>
+          <div class="dailyMeta" id="dailyMeta">Due reviews: 0 · Next: -</div>
+          <div class="row">
+            <button class="btn" id="btnOpenRecommended">Open Recommended</button>
+            <button class="btn btnGhost" id="btnFocusToggle">Focus 25:00</button>
+            <button class="btn btnGhost" id="btnFocusReset">Reset</button>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnOpenPlan">Open Top150 Plan</button>
+          <button class="btn btnGhost" id="btnOpenNext">Open Next</button>
+          <button class="btn" id="btnReloadCourse">Reload Course</button>
+          <div class="pill" id="courseStatus">Not imported</div>
+        </div>
+        <div class="courseHint" id="courseHint">
+          Import flow: open the Top Interview 150 study plan page once. The extension will scrape it and cache the
+          curriculum automatically.
+        </div>
+        <div id="courseList" class="courseList"></div>
+      </section>
+
+      <section class="page" id="page-tutor" data-page="tutor">
+        <div class="row">
+          <label class="labelInline">
+            <span id="labelStage">Stage</span>
+            <select id="stageSelect" class="select">
+              <option value="plan">plan</option>
+              <option value="hint" selected>hint</option>
+              <option value="pseudocode">pseudocode</option>
+              <option value="explain">explain</option>
+              <option value="postmortem">postmortem</option>
+            </select>
+          </label>
+          <button class="btn btnGhost" id="btnClearChat">Clear</button>
+        </div>
+
+        <div class="attempt" id="attemptPanel">
+          <div class="attemptHeader">
+            <div class="attemptTitle" id="attemptTitle">Attempt (to unlock spoilers)</div>
+            <label class="attemptToggle">
+              <input type="checkbox" id="attemptTried" />
+              <span id="attemptTriedLabel">I tried myself</span>
+            </label>
+          </div>
+          <textarea
+            id="attemptNotes"
+            class="textarea"
+            rows="3"
+            placeholder="Write your own approach / invariant / edge cases..."
+          ></textarea>
+          <div class="row">
+            <button class="btn btnGhost" id="btnSaveAttempt">Save Attempt</button>
+            <div class="pill" id="attemptStatus">Locked</div>
+          </div>
+          <div class="smallHint" id="attemptHint">
+            Spoiler Guard blocks Hint/Pseudocode/Explain until you write attempt notes (>= N chars) or check “I tried
+            myself”.
+          </div>
+        </div>
+
+        <div id="chat" class="chat"></div>
+
+        <div class="composer">
+          <textarea id="chatInput" class="textarea" rows="3" placeholder="Ask for a hint, plan, or explanation..."></textarea>
+          <div class="row">
+            <button class="btn btnGhost" id="btnQuickHint">Hint</button>
+            <button class="btn btnGhost" id="btnQuickPlan">Plan</button>
+            <button class="btn btnGhost" id="btnQuickPseudo">Pseudocode</button>
+            <button class="btn btnGhost" id="btnQuickExplain">Explain</button>
+            <button class="btn" id="btnSend">Send</button>
+          </div>
+          <div class="smallHint" id="tutorHint">
+            The agent will default to Chinese output and avoid full code unless you explicitly ask.
+          </div>
+        </div>
+      </section>
+
+      <section class="page" id="page-review" data-page="review">
+        <div class="row">
+          <label class="labelInline">
+            <span id="labelReviewLanguage">Language</span>
+            <select id="langSelect" class="select">
+              <option value="python">python</option>
+              <option value="java">java</option>
+              <option value="cpp">cpp</option>
+              <option value="javascript">javascript</option>
+              <option value="typescript">typescript</option>
+              <option value="go">go</option>
+              <option value="other">other</option>
+            </select>
+          </label>
+          <button class="btn btnGhost" id="btnPullCode">Pull Code</button>
+          <button class="btn" id="btnReview">Review</button>
+        </div>
+        <textarea id="codeInput" class="textarea code" rows="12" placeholder="Paste your solution code here..."></textarea>
+        <div class="row">
+          <button class="btn btnGhost" id="btnReviewCorrectness">Correctness</button>
+          <button class="btn btnGhost" id="btnReviewComplexity">Complexity</button>
+          <button class="btn btnGhost" id="btnReviewEdge">Edge cases</button>
+        </div>
+        <div id="reviewOutput" class="output"></div>
+      </section>
+
+      <section class="page" id="page-settings" data-page="settings">
+        <div class="row">
+          <div class="field fieldInline">
+            <label class="label" for="setUiLanguage" id="labelUiLanguage">UI Language</label>
+            <select id="setUiLanguage" class="select">
+              <option value="zh">中文</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div class="field fieldInline">
+            <label class="label" for="setOutputLanguage" id="labelOutputLanguage">Tutor Output</label>
+            <select id="setOutputLanguage" class="select">
+              <option value="zh">中文</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <label class="labelInline">
+            <input type="checkbox" id="setSpoilerGuard" />
+            <span id="labelSpoilerGuard">Spoiler Guard</span>
+          </label>
+          <div class="field fieldInline">
+            <label class="label" for="setMinAttemptChars" id="labelMinAttemptChars">Min attempt chars</label>
+            <input id="setMinAttemptChars" class="input" type="number" min="0" max="500" step="10" />
+          </div>
+        </div>
+        <div class="field">
+          <label class="label" for="setBaseUrl">Base URL</label>
+          <input id="setBaseUrl" class="input" type="text" spellcheck="false" />
+          <div class="smallHint">Default: https://api.openai.com/v1/chat/completions</div>
+        </div>
+        <div class="field">
+          <label class="label" for="setApiKey">API Key</label>
+          <input id="setApiKey" class="input" type="password" spellcheck="false" placeholder="sk-..." />
+        </div>
+        <div class="field">
+          <label class="label" for="setModel">Model</label>
+          <input id="setModel" class="input" type="text" spellcheck="false" />
+        </div>
+        <div class="row">
+          <div class="field fieldInline">
+            <label class="label" for="setTemp">Temperature</label>
+            <input id="setTemp" class="input" type="number" min="0" max="2" step="0.1" />
+          </div>
+          <div class="field fieldInline">
+            <label class="label" for="setMaxTokens">Max tokens</label>
+            <input id="setMaxTokens" class="input" type="number" min="50" max="4096" step="50" />
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnSaveSettings">Save</button>
+          <button class="btn btnGhost" id="btnTestSettings">Test</button>
+          <div class="pill" id="settingsStatus">Not configured</div>
+        </div>
+        <div class="courseHint">
+          Host permissions currently allow only `api.openai.com` and `localhost`. If you use another provider domain,
+          add it to `extension/manifest.json` -> `host_permissions`.
+        </div>
+      </section>
+    </main>
+
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
